@@ -36,7 +36,15 @@ A DeepSeek Harness plugin suite that brings **DeepSeek balance**, **ChatGPT/Code
 | `dsh-chatgpt-login` | ChatGPT OAuth、CodexManager 同步、额度接口与统一 UI |
 | `docs/images` | 项目截图 |
 
-### 安装
+### 一条命令安装（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CalvinQin/dsh-provider-balance-quota/main/install.sh | bash
+```
+
+脚本会自动下载插件、写入 `cordis.patch.yml` 并重启 DeepSeek Harness。执行前建议先查看脚本内容；它只会写入 `~/.dsh/profiles/`，不会上传任何凭据。
+
+### 手动安装
 
 将两个插件复制到 DSH profile：
 
@@ -59,6 +67,10 @@ cp -R dsh-chatgpt-login ~/.dsh/profiles/node_modules/
 ```
 
 重启 DeepSeek Harness 后刷新页面。
+
+### 插件市场说明
+
+目前 DSH 的公开插件加载方式是 profile + `cordis.patch.yml`，暂未发现可直接提交第三方插件的官方公共插件市场。因此本项目先通过公开 GitHub 仓库和一键安装脚本分发。
 
 ### 配置与安全
 
@@ -100,7 +112,15 @@ remaining = 100 - used_percent
 
 ![Provider balances and quotas settings](docs/images/settings.png)
 
-### Installation
+### One-command installation (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CalvinQin/dsh-provider-balance-quota/main/install.sh | bash
+```
+
+The installer downloads both plugins, updates `cordis.patch.yml`, and restarts DeepSeek Harness. Review `install.sh` first if preferred; it only writes under `~/.dsh/profiles/` and never uploads credentials.
+
+### Manual installation
 
 ```bash
 cp -R dsh-balance-card ~/.dsh/profiles/node_modules/
@@ -108,6 +128,10 @@ cp -R dsh-chatgpt-login ~/.dsh/profiles/node_modules/
 ```
 
 Add both plugins to `~/.dsh/profiles/web/cordis.patch.yml`, then restart DeepSeek Harness and refresh the page.
+
+### Marketplace status
+
+The current public DSH loading path is profile-based (`cordis.patch.yml`). No public third-party plugin marketplace submission API was found in the current DSH distribution, so this project is distributed through GitHub and the installer above.
 
 ### Security
 
