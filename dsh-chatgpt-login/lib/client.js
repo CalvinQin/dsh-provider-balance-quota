@@ -89,6 +89,9 @@ window.__ModuleLoader__.load({
 			".dshg-railDot{width:6px;height:6px;border-radius:50%;flex:none;margin-top:9px}",
 			".dshg-railDot.on{background:var(--dsw-alias-state-success-primary)}",
 			".dshg-railDot.off{background:var(--dsw-alias-label-tertiary)}",
+			// ── 侧边栏自适应：与其他全宽按钮（如插件市场）共存时，让槽位容器换行、本卡片独占一行 ──
+			"div:has(> div > .dshg-side:not(.collapsed)){flex-wrap:wrap}",
+			".dshg-side:not(.collapsed){flex:1 1 100%}",
 		].join("");
 
 		// ── 共享数据 hook ────────────────────────────────────────────────

@@ -1,0 +1,8 @@
+# dsh-chatgpt-login bundle patch — inserts the ChatGPT login / quota entry
+# into the composed profile tree. Applied as one bundle layer when the package
+# is installed into a profile with:
+#
+#   dsh plugin --profile <name> add dsh-chatgpt-login
+- insert:
+    - id: chatgpt-login
+      name: dsh-chatgpt-login

@@ -1,0 +1,10 @@
+# dsh-balance-card bundle patch — inserts the balance card entry into the
+# composed profile tree. Applied as one bundle layer when the package is
+# installed into a profile with:
+#
+#   dsh plugin --profile <name> add dsh-balance-card
+- insert:
+    - id: balance-card
+      name: dsh-balance-card
+      config:
+        rev: 2

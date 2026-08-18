@@ -43,35 +43,25 @@ A DeepSeek Harness plugin suite that brings **DeepSeek balance**, **ChatGPT/Code
 curl -fsSL https://raw.githubusercontent.com/CalvinQin/dsh-provider-balance-quota/main/install.sh | bash
 ```
 
-脚本会自动下载插件、写入 `cordis.patch.yml` 并重启 DeepSeek Harness。执行前建议先查看脚本内容；它只会写入 `~/.dsh/profiles/`，不会上传任何凭据。
+脚本会通过官方 `dsh plugin` 命令从 **npm** 安装两个插件（`dsh-balance-card`、`dsh-chatgpt-login`）并重启 DSH Desktop。执行前建议先查看脚本内容；它只写入当前 DSH profile，不会上传任何凭据。
 
-### 手动安装
+### 手动安装（dsh 命令）
 
-将两个插件复制到 DSH profile：
+两个插件都是标准 DSH bundle（`package.json` 声明了 `dsh.bundle.patch` + 包内 `cordis.patch.yml`），可以用官方 `dsh plugin` 命令安装，不需要手动复制或改 patch：
 
 ```bash
-cp -R dsh-balance-card ~/.dsh/profiles/node_modules/
-cp -R dsh-chatgpt-login ~/.dsh/profiles/node_modules/
+# 本地 tarball（仓库内已打包 dsh-balance-card-0.1.0.tgz / dsh-chatgpt-login-0.2.0.tgz）
+dsh plugin --profile desktop add ./dsh-balance-card-0.1.0.tgz ./dsh-chatgpt-login-0.2.0.tgz
+
+# 发布到 npm 之后（推荐给其他用户）：
+dsh plugin --profile desktop add dsh-balance-card dsh-chatgpt-login
 ```
 
-在 `~/.dsh/profiles/web/cordis.patch.yml` 添加：
-
-```yaml
-- insert:
-    - id: balance-card
-      name: dsh-balance-card
-      config:
-        rev: 2
-- insert:
-    - id: chatgpt-login
-      name: dsh-chatgpt-login
-```
-
-重启 DeepSeek Harness 后刷新页面。
+`dsh` 命令在 DSH Desktop 2.x 的托盘终端里直接可用（无需配置 PATH）。插件变更后重启 DSH Desktop（托盘 → 退出 → 重新打开）即生效，设置页顶部会出现「供应商余额与额度」。
 
 ### 插件市场说明
 
-目前 DSH 的公开插件加载方式是 profile + `cordis.patch.yml`，暂未发现可直接提交第三方插件的官方公共插件市场。因此本项目先通过公开 GitHub 仓库和一键安装脚本分发。
+DSH Desktop 2.x 已内置插件市场（`dsh-community-market`），可直接在侧边栏的「插件市场」入口浏览、安装和管理插件。本项目也可直接通过 GitHub 仓库和上面的安装脚本分发。
 
 ### 配置与安全
 

@@ -10,3 +10,6 @@
 
 # Temporary screenshots/build artifacts
 /tmp/
+
+# build artifacts
+*.tgz
