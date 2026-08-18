@@ -81,7 +81,8 @@ window.__ModuleLoader__.load({
 			".dshg-progressFill{height:100%;border-radius:999px;background:var(--dsw-alias-state-success-primary);transition:width .25s ease}",
 			".dshg-progressFill.warn{background:var(--dsw-alias-state-warn-primary)}",
 			".dshg-quotaMeta{font-size:10px;line-height:13px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}",
-			".dshg-segBtn{display:inline-flex;align-items:center;justify-content:center;height:20px;margin-top:3px;padding:0 8px;border:none;border-radius:6px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-inverted);text-decoration:none;font-family:inherit;font-size:10.5px;line-height:20px;cursor:pointer}",
+			".dshg-segActions{display:flex;align-items:center;gap:5px;margin-top:3px}",
+			".dshg-segBtn{display:inline-flex;align-items:center;justify-content:center;height:20px;margin:0;padding:0 8px;border:0;border-radius:6px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-inverted);text-decoration:none;font-family:inherit;font-size:10.5px;line-height:20px;cursor:pointer}",
 			".dshg-segBtn:hover{background:var(--dsw-alias-button-primary-hover)}",
 			".dshg-railBtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:50%;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:13px;font-weight:600;text-decoration:none;cursor:pointer}",
 			".dshg-railBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}",
@@ -166,9 +167,42 @@ window.__ModuleLoader__.load({
 		function SidebarWidget({ wide }) {
 			const chat = useChatGptState();
 			const ds = useDeepSeekBalance();
+			const [switchCode, setSwitchCode] = useState(null);
+			const [switching, setSwitching] = useState(false);
 			const loggedIn = chat.status?.loggedIn === true;
 			const info = chat.status?.account ?? chat.status?.accountId;
 			const chip = quotaChip(chat.quota, loggedIn);
+
+			const switchAccount = () => {
+				const popup = window.open("about:blank", "_blank");
+				setSwitching(true);
+				fetch(LOGIN_START_URL, { method: "POST", headers: { accept: "application/json" } })
+					.then((r) => r.json().catch(() => null))
+					.then((body) => {
+						setSwitching(false);
+						if (body?.ok) {
+							setSwitchCode(body.userCode);
+							if (popup) popup.location.href = body.verificationUrl;
+							else window.open(body.verificationUrl, "_blank");
+						} else if (popup) {
+							popup.close();
+						}
+					})
+					.catch(() => { setSwitching(false); if (popup) popup.close(); });
+			};
+
+			useEffect(() => {
+				if (!switchCode) return;
+				const timer = setInterval(() => {
+					fetch(LOGIN_STATUS_URL, { headers: { accept: "application/json" } })
+						.then((r) => r.json().catch(() => null))
+						.then((body) => {
+							if (body?.state === "approved") { setSwitchCode(null); chat.refresh(); }
+						})
+					.catch(() => {});
+				}, 3000);
+				return () => clearInterval(timer);
+			}, [switchCode]);
 
 			useEffect(() => {
 				const style = document.createElement("style");
@@ -220,8 +254,12 @@ window.__ModuleLoader__.load({
 							jsx("span", { className: "dshg-segLabel", children: planLabel(chat.status?.plan) }),
 							!loggedIn && jsx("span", { className: "dshg-segValue dim", children: "未登录" }),
 							loggedIn && remainingPercent(chat.quota) !== null && jsx("div", { className: "dshg-progress", children: jsx("div", { className: `dshg-progressFill${chip.cls === "warn" ? " warn" : ""}`, style: { width: `${remainingPercent(chat.quota)}%` } }) }),
-							loggedIn && remainingPercent(chat.quota) !== null && jsx("span", { className: "dshg-quotaMeta", children: `剩余 ${remainingPercent(chat.quota)}% · ${resetLabel(chat.quota)}` }),
-							jsx("a", { className: "dshg-segBtn", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", onClick: (e) => e.stopPropagation(), children: loggedIn ? "打开" : "登录" }),
+							loggedIn && remainingPercent(chat.quota) !== null && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `验证码 ${switchCode}` : `剩余 ${remainingPercent(chat.quota)}% · ${resetLabel(chat.quota)}` }),
+							!loggedIn && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `验证码 ${switchCode}` : "" }),
+							jsxs("div", { className: "dshg-segActions", children: [
+								jsx("a", { className: "dshg-segBtn", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", onClick: (e) => e.stopPropagation(), children: loggedIn ? "打开" : "登录" }),
+								jsx("button", { type: "button", className: "dshg-segBtn", disabled: switching, onClick: (e) => { e.stopPropagation(); switchAccount(); }, children: switching ? "授权中…" : "切换账号" }),
+							] }),
 						],
 					}),
 				],
@@ -274,6 +312,7 @@ window.__ModuleLoader__.load({
 			const chip = quotaChip(chat.quota, loggedIn);
 
 			const startLogin = () => {
+				const popup = window.open("about:blank", "_blank");
 				setBusy(true);
 				setMsg(null);
 				fetch(LOGIN_START_URL, { method: "POST", headers: { accept: "application/json" } })
@@ -282,11 +321,14 @@ window.__ModuleLoader__.load({
 						setBusy(false);
 						if (body && body.ok === true) {
 							setFlow({ state: "pending", userCode: body.userCode, verificationUrl: body.verificationUrl });
+							if (popup) popup.location.href = body.verificationUrl;
+							else window.open(body.verificationUrl, "_blank");
 						} else {
+							if (popup) popup.close();
 							setMsg({ kind: "bad", text: body?.message ?? "发起授权失败。" });
 						}
 					})
-					.catch(() => { setBusy(false); setMsg({ kind: "bad", text: "网络请求失败，请稍后重试。" }); });
+					.catch(() => { setBusy(false); if (popup) popup.close(); setMsg({ kind: "bad", text: "网络请求失败，请稍后重试。" }); });
 			};
 
 			const logout = () => {
@@ -386,7 +428,7 @@ window.__ModuleLoader__.load({
 					jsxs("div", {
 						className: "dshg-actions",
 						children: [
-							!managedByCodex && jsx("button", { type: "button", className: "dshg-primary", onClick: startLogin, disabled: busy, children: loggedIn ? "重新授权" : "一键授权登录" }),
+							jsx("button", { type: "button", className: "dshg-primary", onClick: startLogin, disabled: busy, children: loggedIn ? "切换账号" : "一键授权登录" }),
 							jsx("a", { className: "dshg-ghost", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", children: "打开 ChatGPT" }),
 							loggedIn && !managedByCodex && jsx("button", { type: "button", className: "dshg-ghost danger", onClick: logout, disabled: busy, children: "退出登录" }),
 						],

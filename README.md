@@ -15,7 +15,8 @@ A DeepSeek Harness plugin suite that brings **DeepSeek balance**, **ChatGPT/Code
 - ChatGPT 额度来自官方 Codex 用量接口，显示剩余比例与重置时间
 - 自动同步 `~/.codex/auth.json`，跟随 CodexManager 切换账号
 - 设置页合并为「供应商余额与额度」
-- 一键 DeepSeek 充值、打开 ChatGPT
+- 一键 DeepSeek 充值、打开 ChatGPT、切换 ChatGPT 账号
+- 侧边栏和设置页都提供官方网页授权切换入口
 - 兼容浅色/深色主题，使用 DSH 语义化颜色变量
 
 ### 界面预览
@@ -99,7 +100,8 @@ remaining = 100 - used_percent
 - Reads the official Codex usage endpoint for remaining percentage and reset time
 - Watches `~/.codex/auth.json` and follows CodexManager account switching
 - Unified settings section: **Provider Balances & Quotas**
-- One-click DeepSeek recharge and ChatGPT access
+- One-click DeepSeek recharge, ChatGPT access, and account switching
+- Official web authorization entry in both the sidebar and settings
 - Theme-safe semantic colors for light and dark mode
 
 ### Screenshots
