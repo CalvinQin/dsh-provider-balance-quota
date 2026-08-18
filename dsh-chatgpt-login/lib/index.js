@@ -64,6 +64,10 @@ export const QUOTA_CACHE_MS = 90 * 1000
 
 /** 进行中的设备码授权（单实例登录）。 */
 let deviceFlow = null
+/** 手动授权切换后的临时覆盖：等待 CodexManager auth.json 真正变化。 */
+let manualOverride = null
+/** 最近一次观察到的 CodexManager access token。 */
+let lastCodexAccess = null
 /** 额度探测缓存。 */
 let quotaCache = { at: 0, value: undefined }
 
@@ -184,6 +188,12 @@ export async function syncFromCodexManager(ctx) {
   const access = auth?.tokens?.access_token
   const refresh = auth?.tokens?.refresh_token
   if (typeof access !== 'string' || access.length < 20) return
+  if (manualOverride) {
+    if (access === manualOverride.codexAccess) return
+    // CodexManager 已经写入了新的令牌/账号，结束手动覆盖并恢复同步。
+    manualOverride = null
+  }
+  lastCodexAccess = access
   const payload = decodeJwtPayload(access)
   if (!payload) return
   const claim = payload['https://api.openai.com/auth']
@@ -581,6 +591,7 @@ async function handleLoginStatus(ctx, req, res) {
     const result = await pollDeviceAuth(flow)
     if (result.status === 'approved') {
       const tokens = await exchangeTokens(result.code, result.verifier)
+      manualOverride = { codexAccess: lastCodexAccess ?? readTokenStore()?.access }
       writeTokenStore(tokens)
       await ensureProviderRoute(ctx)
       flow.state = 'approved'
@@ -608,6 +619,7 @@ async function handleLogout(ctx, req, res) {
   }
   clearTokenStore()
   deviceFlow = null
+  manualOverride = null
   quotaCache = { at: 0, value: undefined }
   await ensureProviderRoute(ctx)
   respond(res, 200, { ok: true, loggedIn: false })
