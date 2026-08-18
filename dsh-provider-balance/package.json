@@ -1,7 +1,7 @@
 {
   "name": "dsh-provider-balance",
   "description": "供应商余额与额度：DeepSeek 余额卡片 + ChatGPT 登录/额度（CodexManager 同步），合并版单一插件",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "main": "lib/index.js",

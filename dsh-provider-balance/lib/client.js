@@ -134,11 +134,16 @@ window.__ModuleLoader__.load({
 			const [attempt, setAttempt] = useState(0);
 			useEffect(() => {
 				let cancelled = false;
-				fetch(BALANCE_URL, { headers: { accept: "application/json" } })
-					.then((r) => r.json().catch(() => null))
-					.then((body) => { if (!cancelled && body && body.ok === true && body.data) setBalance(body.data); })
-					.catch(() => { /* keep last */ });
-				return () => { cancelled = true; };
+				const load = () => {
+					fetch(BALANCE_URL, { headers: { accept: "application/json" } })
+						.then((r) => r.json().catch(() => null))
+						.then((body) => { if (!cancelled && body && body.ok === true && body.data) setBalance(body.data); })
+						.catch(() => { /* keep last */ });
+				};
+				load();
+				// 余额每分钟自动刷新（与 ChatGPT 额度同频），避免长期停留在旧值。
+				const timer = setInterval(load, 60_000);
+				return () => { cancelled = true; clearInterval(timer); };
 			}, [attempt]);
 			return { balance, refresh: () => setAttempt((n) => n + 1) };
 		}
@@ -154,6 +159,7 @@ window.__ModuleLoader__.load({
 			if (!quota) return { text: "额度…", cls: "off" };
 			if (quota.status === "available") return { text: "额度可用", cls: "on" };
 			if (quota.status === "limited") return { text: "额度用尽", cls: "warn" };
+			if (quota.status === "invalidated") return { text: "登录失效", cls: "warn" };
 			return { text: "额度未知", cls: "off" };
 		}
 
@@ -210,11 +216,11 @@ window.__ModuleLoader__.load({
 							if (body?.ok) {
 								setOpenHint(body?.verifyUrl ? "已打开 CodexManager：请在其中登录/切换账号，DSH 会自动跟随。" : "已打开 CodexManager");
 							} else {
-								setOpenHint("未检测到 CodexManager，改用手动授权。");
+								setOpenHint("未检测到 CodexManager，改用网页授权登录。");
 								startDeviceFlow();
 							}
 						})
-						.catch(() => { setSwitching(false); setOpenHint("打开 CodexManager 失败，改用手动授权。"); startDeviceFlow(); });
+						.catch(() => { setSwitching(false); setOpenHint("打开 CodexManager 失败，改用网页授权登录。"); startDeviceFlow(); });
 					return;
 				}
 				startDeviceFlow();
@@ -283,8 +289,8 @@ window.__ModuleLoader__.load({
 							jsx("span", { className: "dshg-segLabel", children: planLabel(chat.status?.plan) }),
 							!loggedIn && jsx("span", { className: "dshg-segValue dim", children: "未登录" }),
 							loggedIn && remainingPercent(chat.quota) !== null && jsx("div", { className: "dshg-progress", children: jsx("div", { className: `dshg-progressFill${chip.cls === "warn" ? " warn" : ""}`, style: { width: `${remainingPercent(chat.quota)}%` } }) }),
-							loggedIn && remainingPercent(chat.quota) !== null && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `验证码 ${switchCode}` : (openHint ?? `剩余 ${remainingPercent(chat.quota)}% · ${resetLabel(chat.quota)}`) }),
-							!loggedIn && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `验证码 ${switchCode}` : (openHint ?? "") }),
+							loggedIn && remainingPercent(chat.quota) !== null && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `授权码 ${switchCode}` : (openHint ?? `剩余 ${remainingPercent(chat.quota)}% · ${resetLabel(chat.quota)}`) }),
+							!loggedIn && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `授权码 ${switchCode}` : (openHint ?? "") }),
 							jsxs("div", { className: "dshg-segActions", children: [
 								jsx("a", { className: "dshg-segBtn", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", onClick: (e) => e.stopPropagation(), children: loggedIn ? "打开" : "登录" }),
 								jsx("button", { type: "button", className: "dshg-segBtn", disabled: switching, onClick: (e) => { e.stopPropagation(); switchAccount(); }, children: switching ? "授权中…" : "切换账号" }),
@@ -399,9 +405,15 @@ window.__ModuleLoader__.load({
 					className: "dshg-statusRow",
 					children: [
 						jsx("span", { className: "dshg-status", children: loggedIn ? "已登录" : "未登录" }),
-						jsx("span", { className: "dshg-sub", children: managedByCodex ? "由 CodexManager 同步账号" : (loggedIn ? "手动授权" : "尚未接入") }),
+						jsx("span", { className: "dshg-sub", children: managedByCodex ? "由 CodexManager 同步账号" : (loggedIn ? "网页授权" : "尚未接入") }),
 					],
 				});
+				if (loggedIn && chat.quota?.status === "invalidated") {
+					statusBody = jsxs("div", { className: "dshg-statusRow", children: [
+						jsx("span", { className: "dshg-chip warn", children: "登录失效" }),
+						jsx("span", { className: "dshg-sub", children: "ChatGPT 会话已过期，请打开 CodexManager 重新登录，DSH 会自动同步。" }),
+					] });
+				}
 			}
 
 			let accountBody = null;
@@ -409,7 +421,7 @@ window.__ModuleLoader__.load({
 				accountBody = jsxs("div", {
 					className: "dshg-sub",
 					children: [
-						status?.source === "codex-manager" ? "由 CodexManager 管理账号，切换后 DSH 自动跟随。" : "手动授权账号，令牌将自动刷新。",
+						status?.source === "codex-manager" ? "由 CodexManager 管理账号，切换后 DSH 自动跟随。" : "网页授权账号，令牌将自动刷新。",
 					],
 				});
 			}
@@ -420,12 +432,12 @@ window.__ModuleLoader__.load({
 					className: "dshg-flow",
 					children: [
 						jsx("div", { className: "dshg-code", children: flow.userCode }),
-						jsx("div", { className: "dshg-hint", children: "请在新打开的 OpenAI 授权页输入上面的验证码并点击「继续」，等待授权结果…" }),
+						jsx("div", { className: "dshg-hint", children: "网页授权码登录：在打开的 OpenAI 登录页输入上方授权码并点击「继续」，授权成功后自动接入 DSH。" }),
 						jsxs("div", {
 							className: "dshg-actions",
 							children: [
-								jsx("a", { className: "dshg-primary", href: flow.verificationUrl, target: "_blank", rel: "noopener noreferrer", children: "打开授权页" }),
-								jsx("span", { className: "dshg-hint", children: "若页面未打开，请手动访问 auth.openai.com/codex/device" }),
+								jsx("a", { className: "dshg-primary", href: flow.verificationUrl, target: "_blank", rel: "noopener noreferrer", children: "打开登录页" }),
+								jsx("span", { className: "dshg-hint", children: "若页面未打开，请访问 auth.openai.com/codex/device 输入授权码" }),
 							],
 						}),
 					],
@@ -477,8 +489,8 @@ window.__ModuleLoader__.load({
 						children: [
 							status?.managerAvailable
 								? jsx("button", { type: "button", className: "dshg-primary", onClick: openManager, disabled: busy, children: loggedIn ? "打开 CodexManager 切换" : "用 CodexManager 登录" })
-								: jsx("button", { type: "button", className: "dshg-primary", onClick: startLogin, disabled: busy, children: loggedIn ? "切换账号" : "一键授权登录" }),
-							status?.managerAvailable && jsx("button", { type: "button", className: "dshg-ghost", onClick: startLogin, disabled: busy, children: "手动授权（备用）" }),
+								: jsx("button", { type: "button", className: "dshg-primary", onClick: startLogin, disabled: busy, children: loggedIn ? "切换账号" : "网页授权登录" }),
+							status?.managerAvailable && jsx("button", { type: "button", className: "dshg-ghost", onClick: startLogin, disabled: busy, children: "网页授权登录（备用）" }),
 							jsx("a", { className: "dshg-ghost", href: CHOOSE_ACCOUNT_URL, target: "_blank", rel: "noopener noreferrer", children: "OpenAI 账号登录" }),
 							jsx("a", { className: "dshg-ghost", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", children: "打开 ChatGPT" }),
 							loggedIn && !managedByCodex && jsx("button", { type: "button", className: "dshg-ghost danger", onClick: logout, disabled: busy, children: "退出登录" }),

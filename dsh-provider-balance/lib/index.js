@@ -407,7 +407,15 @@ async function fetchChatGptUsage(store) {
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
-  if (!response.ok) throw new Error(`额度接口返回 HTTP ${response.status}`)
+  if (!response.ok) {
+    // 区分「会话失效」与其它上游错误，让 UI 提示重新登录而非「额度未知」。
+    const body = await response.json().catch(() => null)
+    const code = body?.error?.code
+    const invalidated = code === 'token_invalidated' || code === 'refresh_token_invalidated'
+      || /invalidated|session has ended/i.test(body?.error?.message ?? '')
+    if (invalidated) throw new UsageInvalidatedError(body?.error?.message)
+    throw new Error(`额度接口返回 HTTP ${response.status}`)
+  }
   const json = await response.json()
   const primary = json?.rate_limit?.primary_window
   const secondary = json?.rate_limit?.secondary_window
@@ -461,6 +469,14 @@ async function probeChatGptQuota(store) {
   return { status: 'unknown', message: '无响应' }
 }
 
+/** 会话失效：token 在 OpenAI 侧被作废（需重新登录）。 */
+class UsageInvalidatedError extends Error {
+  constructor(message) {
+    super(message ?? '登录已失效')
+    this.name = 'UsageInvalidatedError'
+  }
+}
+
 async function getQuota(store) {
   if (quotaCache.value && Date.now() - quotaCache.at < QUOTA_CACHE_MS) {
     return { ...quotaCache.value, cached: true }
@@ -469,8 +485,16 @@ async function getQuota(store) {
   try {
     value = await fetchChatGptUsage(store)
   } catch (error) {
-    value = await probeChatGptQuota(store)
-    value.message = value.message ?? (error instanceof Error ? `额度详情暂不可用：${error.message}` : '额度详情暂不可用')
+    if (error instanceof UsageInvalidatedError) {
+      value = { status: 'invalidated', message: error.message || '登录已失效，请用 CodexManager 重新登录' }
+    } else {
+      try {
+        value = await probeChatGptQuota(store)
+      } catch {
+        value = {}
+      }
+      value.message = value.message ?? (error instanceof Error ? `额度详情暂不可用：${error.message}` : '额度详情暂不可用')
+    }
   }
   quotaCache = { at: Date.now(), value }
   return { ...value, cached: false }
