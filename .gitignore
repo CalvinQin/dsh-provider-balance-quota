@@ -1,0 +1,12 @@
+# Local secrets and runtime state
+.dsh/
+.codex/
+.env
+.env.*
+*.log
+
+# macOS
+.DS_Store
+
+# Temporary screenshots/build artifacts
+/tmp/
