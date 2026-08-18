@@ -1,0 +1,7 @@
+# dsh-provider-balance bundle patch — 供应商余额与额度（DeepSeek 余额 + ChatGPT 登录/额度）。
+# 安装：dsh plugin --profile <name> add dsh-provider-balance
+- insert:
+    - id: provider-balance
+      name: dsh-provider-balance
+      config:
+        rev: 3

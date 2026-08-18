@@ -8,7 +8,7 @@
  * 3. 全部使用语义化主题变量（修复浅色/深色主题下的字体颜色问题）。
  */
 window.__ModuleLoader__.load({
-	id: "dsh-chatgpt-login",
+	id: "dsh-provider-balance",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
 		const MANAGER_OPEN_URL = "/ext/chatgpt/login/open-manager";
 		const CHOOSE_ACCOUNT_URL = "https://auth.openai.com/choose-an-account";
 
-		const name = "dsh-chatgpt-login";
+		const name = "dsh-provider-balance";
 		const inject = ["slots"];
 
 		/** 修复后的通用样式：语义化变量，浅色/深色主题均可用。 */

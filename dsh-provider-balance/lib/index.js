@@ -1,25 +1,25 @@
 /**
- * dsh-chatgpt-login — host half.
+ * dsh-provider-balance — host half（dsh-balance-card + dsh-chatgpt-login 合并版）。
  *
- * ChatGPT 账号接入 DSH 的 LLM provider（openai-codex 路由，Codex 协议），
- * 并保持与本机 CodexManager 的账号同步：
- *
- *  1. CodexManager 同步（主路径）：监听 `~/.codex/auth.json` —— CodexManager
- *     切换账号/刷新令牌都会重写这个文件；检测到变化后把当前账号的 OAuth
- *     access token 镜像进 DSH 凭据（CHATGPT_ACCESS_TOKEN）与令牌库
- *     （~/.dsh/chatgpt-oauth.json），DSH 即跟随 CodexManager 切换账号。
- *  2. 设备码授权流（备用路径，无 CodexManager 时）：用户在自己浏览器打开
- *     授权页输入验证码完成授权（auth.openai.com 官方流程）。
- *  3. 后台刷新：仅对设备码登录的令牌做 refresh（CodexManager 的令牌由它
- *     自己刷新，watch 会同步过来）。
- *  4. 额度探测：通过 pi-ai 的 Codex 客户端（WebSocket 协议，可穿透
- *     Cloudflare）发一个 1-token 的探测请求，判断 ChatGPT 额度是否可用。
+ * 1. DeepSeek 余额：`GET /ext/balance` 同源代理，按 llm-deepseek 适配器相同方式
+ *    解析 API Key（设置 → 凭据 → 环境变量）并查询官方 `GET /user/balance`。
+ * 2. ChatGPT 账号接入 DSH 的 LLM provider（openai-codex 路由，Codex 协议），
+ *    并保持与本机 CodexManager 的账号同步：
+ *    - CodexManager 同步（主路径）：监听 `~/.codex/auth.json`，检测到变化后把
+ *      当前账号的 OAuth access token 镜像进 DSH 凭据（CHATGPT_ACCESS_TOKEN）
+ *      与令牌库（~/.dsh/chatgpt-oauth.json），DSH 即跟随 CodexManager 切换账号。
+ *    - 设备码授权流（备用路径，无 CodexManager 时）：auth.openai.com 官方流程。
+ *    - 后台刷新：仅对设备码登录的令牌做 refresh（CodexManager 的令牌由它自己刷新）。
+ *    - 额度探测：通过 pi-ai 的 Codex 客户端（WebSocket，可穿透 Cloudflare）
+ *      发 1-token 探测请求判断 ChatGPT 额度是否可用。
  *
  * Routes (same-origin only):
- *   GET  /ext/chatgpt/status       — 登录状态（source/plan/expires）
+ *   GET  /ext/balance              — DeepSeek 余额
+ *   GET  /ext/chatgpt/status       — ChatGPT 登录状态（source/plan/expires）
  *   GET  /ext/chatgpt/quota        — ChatGPT 额度探测（90s 缓存）
  *   POST /ext/chatgpt/login/start  — 发起设备码授权（备用）
  *   GET  /ext/chatgpt/login/status — 轮询授权结果
+ *   POST /ext/chatgpt/login/open-manager — 打开 CodexManager（主登录路径）
  *   POST /ext/chatgpt/logout       — 退出（仅清设备码登录的令牌）
  */
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -32,7 +32,7 @@ import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 
-export const name = 'dsh-chatgpt-login'
+export const name = 'dsh-provider-balance'
 export const inject = ['webServer', 'credentials', 'settings']
 
 export const STATUS_PATH = '/ext/chatgpt/status'
@@ -41,6 +41,12 @@ export const LOGIN_START_PATH = '/ext/chatgpt/login/start'
 export const LOGIN_STATUS_PATH = '/ext/chatgpt/login/status'
 export const LOGOUT_PATH = '/ext/chatgpt/logout'
 export const MANAGER_OPEN_PATH = '/ext/chatgpt/login/open-manager'
+
+/** DeepSeek 余额路由（来自 dsh-balance-card）。 */
+export const BALANCE_ROUTE_PATH = '/ext/balance'
+export const DEFAULT_BASE_URL = 'https://api.deepseek.com'
+export const DEFAULT_API_KEY_ENV = 'DEEPSEEK_API_KEY'
+export const UPSTREAM_TIMEOUT_MS = 10_000
 
 /** 凭据引用：access token 通过这个 ref 供 llm-pi-ai 适配器读取。 */
 export const TOKEN_REF = 'CHATGPT_ACCESS_TOKEN'
@@ -77,6 +83,10 @@ let lastCodexAccess = null
 let quotaCache = { at: 0, value: undefined }
 
 export function apply(ctx) {
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: BALANCE_ROUTE_PATH,
+    handler: (req, res) => handleBalanceRequest(ctx, req, res),
+  }), 'dsh-provider-balance: balance route')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: STATUS_PATH,
     handler: (req, res) => handleStatus(ctx, req, res),
@@ -472,6 +482,91 @@ function originAllowed(ctx, req) {
   const origin = req.headers.origin
   if (origin === undefined) return true
   return origin === `http://${ctx.webServer.host}:${ctx.webServer.port}`
+}
+
+/**
+ * DeepSeek 余额（来自 dsh-balance-card）。
+ * 解析连接事实：llm-deepseek 设置节优先，其次环境变量，最后默认值。
+ */
+function resolveConnectionFacts(ctx) {
+  let apiKeyEnv = DEFAULT_API_KEY_ENV
+  let baseURL = process.env.DEEPSEEK_BASE_URL ?? DEFAULT_BASE_URL
+  try {
+    const section = ctx.get('settings')?.get(settingsNamespace('llm-deepseek'))
+    if (section !== null && typeof section === 'object') {
+      if (typeof section.apiKeyEnv === 'string' && section.apiKeyEnv !== '') {
+        apiKeyEnv = section.apiKeyEnv
+      }
+      if (typeof section.baseURL === 'string' && section.baseURL !== '') {
+        baseURL = section.baseURL
+      }
+    }
+  } catch {
+    // namespace absent or not served — keep the defaults
+  }
+  return { apiKeyEnv, baseURL }
+}
+
+async function resolveApiKey(ctx, apiKeyEnv) {
+  const ref = credentialRef(apiKeyEnv)
+  const credential = await ctx.get('credentials')?.resolve(ref)
+  if (credential?.value) return credential.value
+  const ambient = process.env[apiKeyEnv]
+  if (ambient) return ambient
+  return undefined
+}
+
+async function handleBalanceRequest(ctx, req, res) {
+  const origin = req.headers.origin
+  const expectedOrigin = `http://${ctx.webServer.host}:${ctx.webServer.port}`
+  if (origin !== undefined && origin !== expectedOrigin) {
+    respond(res, 403, { ok: false, code: 'forbidden', message: 'Cross-origin request refused.' })
+    return
+  }
+  try {
+    const { apiKeyEnv, baseURL } = resolveConnectionFacts(ctx)
+    const apiKey = await resolveApiKey(ctx, apiKeyEnv)
+    if (!apiKey) {
+      respond(res, 200, {
+        ok: false,
+        code: 'missing-key',
+        message: `未找到 API Key（${apiKeyEnv}）。请在 设置 → 模型 中配置后重试。`,
+      })
+      return
+    }
+    let response
+    try {
+      response = await fetch(`${baseURL}/user/balance`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      })
+    } catch (error) {
+      respond(res, 200, {
+        ok: false,
+        code: 'network',
+        message: `无法连接余额接口：${error instanceof Error ? error.message : String(error)}`,
+      })
+      return
+    }
+    const data = await response.json().catch(() => null)
+    if (!response.ok) {
+      respond(res, 200, {
+        ok: false,
+        code: 'upstream',
+        status: response.status,
+        message: `余额接口返回 ${response.status}`,
+        data,
+      })
+      return
+    }
+    respond(res, 200, { ok: true, data })
+  } catch (error) {
+    respond(res, 500, {
+      ok: false,
+      code: 'internal',
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 function respond(res, status, body) {
