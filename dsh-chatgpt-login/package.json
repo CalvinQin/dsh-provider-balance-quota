@@ -2,7 +2,7 @@
   "name": "dsh-chatgpt-login",
   "description": "ChatGPT 登录与额度卡片：CodexManager 账号同步、侧边栏余额/额度展示、授权登录",
   "version": "0.2.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "lib/index.js",
   "exports": {

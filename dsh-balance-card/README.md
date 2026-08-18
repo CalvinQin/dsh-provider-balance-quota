@@ -1,6 +1,6 @@
 # dsh-balance-card
 
-DeepSeek Harness 插件：在 **设置页顶部** 显示一张余额小卡片（DeepSeek 账户余额、充值/赠送明细、可用状态），并提供 **一键跳转充值**（platform.deepseek.com/top_up）。
+DeepSeek Harness 插件：提供 DeepSeek 余额同源代理与侧边栏数据源。设置页 UI 已与 ChatGPT 额度合并到「供应商余额与额度」，展示 DeepSeek 账户余额、充值/赠送明细，并提供一键充值。
 
 ## 架构
 

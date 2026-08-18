@@ -1,6 +1,6 @@
 # dsh-chatgpt-login
 
-DeepSeek Harness 插件：**ChatGPT 账号 OAuth 授权登录**，授权后 ChatGPT 直接成为 DSH 的 LLM provider —— 模型选择器里出现 GPT-5.x 等模型，agent 可直接使用（走 Codex 协议，直连 `chatgpt.com/backend-api`）。
+DeepSeek Harness 插件：**ChatGPT 账号 OAuth 授权登录、CodexManager 同步与额度展示**。授权或同步后 ChatGPT 直接成为 DSH 的 LLM provider；模型选择器里出现 GPT-5.x 等模型，agent 可直接使用（走 Codex 协议）。设置页与 DeepSeek 余额合并为「供应商余额与额度」，侧边栏展示剩余额度进度。
 
 ## 工作方式
 

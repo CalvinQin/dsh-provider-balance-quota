@@ -2,7 +2,7 @@
   "name": "dsh-balance-card",
   "description": "DeepSeek 余额卡片：在设置页顶部显示账户余额，一键跳转充值",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
