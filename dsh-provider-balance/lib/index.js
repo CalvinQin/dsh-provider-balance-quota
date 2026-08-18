@@ -25,8 +25,10 @@
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, renameSync, watch, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai'
@@ -41,6 +43,13 @@ export const LOGIN_START_PATH = '/ext/chatgpt/login/start'
 export const LOGIN_STATUS_PATH = '/ext/chatgpt/login/status'
 export const LOGOUT_PATH = '/ext/chatgpt/logout'
 export const MANAGER_OPEN_PATH = '/ext/chatgpt/login/open-manager'
+export const WEB_LOGIN_START_PATH = '/ext/chatgpt/login/web-start'
+export const WEB_LOGIN_STATUS_PATH = '/ext/chatgpt/login/web-status'
+
+/** 真实 OAuth 授权码（PKCE）登录：redirect_uri 与 codex CLI 一致，OpenAI 侧已登记。 */
+export const WEB_REDIRECT_URI = 'http://localhost:1455/auth/callback'
+export const WEB_LOGIN_PORT = 1455
+export const OAUTH_SCOPE = 'openid profile email offline_access'
 
 /** DeepSeek 余额路由（来自 dsh-balance-card）。 */
 export const BALANCE_ROUTE_PATH = '/ext/balance'
@@ -75,6 +84,8 @@ export const QUOTA_CACHE_MS = 90 * 1000
 
 /** 进行中的设备码授权（单实例登录）。 */
 let deviceFlow = null
+/** 进行中的网页 OAuth（PKCE）登录。 */
+let webFlow = null
 /** 手动授权切换后的临时覆盖：等待 CodexManager auth.json 真正变化。 */
 let manualOverride = null
 /** 最近一次观察到的 CodexManager access token。 */
@@ -111,6 +122,14 @@ export function apply(ctx) {
     kind: 'exact', path: MANAGER_OPEN_PATH,
     handler: (req, res) => handleOpenManager(ctx, req, res),
   }), 'dsh-chatgpt-login: open codex-manager route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: WEB_LOGIN_START_PATH,
+    handler: (req, res) => handleWebLoginStart(ctx, req, res),
+  }), 'dsh-provider-balance: web oauth start route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: WEB_LOGIN_STATUS_PATH,
+    handler: (req, res) => handleWebLoginStatus(ctx, req, res),
+  }), 'dsh-provider-balance: web oauth status route')
 
   // CodexManager 监听：watch 目录（捕获原子替换）+ 轮询兜底。
   ctx.effect(() => {
@@ -672,6 +691,150 @@ async function handleOpenManager(ctx, req, res) {
   }
 }
 
+// ── 网页 OAuth（PKCE 授权码）登录 ──────────────────────────────────────────
+
+/**
+ * 启动真实 OAuth 授权码登录：起本地回调服务（127.0.0.1:1455/auth/callback），
+ * 返回授权 URL（打开后落在 auth.openai.com/choose-an-account 网页登录），
+ * 用户登录后 OpenAI 回调本地端口，插件用 PKCE verifier 换令牌入库。
+ */
+async function handleWebLoginStart(ctx, req, res) {
+  if (!originAllowed(ctx, req)) {
+    respond(res, 403, { ok: false, code: 'forbidden', message: 'Cross-origin request refused.' })
+    return
+  }
+  if (req.method !== 'POST') {
+    respond(res, 405, { ok: false, code: 'method', message: 'POST only.' })
+    return
+  }
+  // 清理上一次未完成的流程。
+  if (webFlow) {
+    try { webFlow.server?.close() } catch { /* already closed */ }
+    webFlow = null
+  }
+  const verifier = randomBytes(32).toString('base64url')
+  const challenge = createHash('sha256').update(verifier).digest('base64url')
+  const state = randomBytes(16).toString('hex')
+  const server = createServer((cbReq, cbRes) => {
+    const url = new URL(cbReq.url ?? '/', 'http://localhost')
+    if (url.pathname !== '/auth/callback') {
+      cbRes.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found')
+      return
+    }
+    const code = url.searchParams.get('code')
+    const returnedState = url.searchParams.get('state')
+    if (!code || returnedState !== state) {
+      cbRes.writeHead(400, { 'content-type': 'text/html; charset=utf-8' })
+        .end('<meta charset="utf-8"><h2>登录失败</h2><p>回调状态不匹配，请重试。</p>')
+      if (webFlow) { webFlow.pending = false; webFlow.approved = false; webFlow.error = '回调状态不匹配' }
+      return
+    }
+    cbRes.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      .end('<meta charset="utf-8"><h2>✅ 登录成功</h2><p>已接入 DSH，可以关闭此页面。</p>')
+    settleWebOAuth(code, verifier, ctx)
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(WEB_LOGIN_PORT, '127.0.0.1', resolve)
+  }).catch(() => {
+    respond(res, 200, {
+      ok: false,
+      code: 'port-busy',
+      message: `本地回调端口 ${WEB_LOGIN_PORT} 被占用（可能正有 codex 登录在跑），请稍后重试。`,
+    })
+    return
+  })
+  webFlow = { server, verifier, state, pending: true }
+  const authorizeUrl = `${AUTH_BASE}/oauth/authorize?${new URLSearchParams({
+    client_id: CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: WEB_REDIRECT_URI,
+    scope: OAUTH_SCOPE,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+  })}`
+  respond(res, 200, { ok: true, authorizeUrl, state })
+}
+
+/** 回调收到授权码后：换令牌 → 写库 → 接上 DSH provider 路由。 */
+async function settleWebOAuth(code, verifier, ctx) {
+  try {
+    const response = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_ID,
+        code,
+        code_verifier: verifier,
+        redirect_uri: WEB_REDIRECT_URI,
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      throw new Error(`令牌交换失败（HTTP ${response.status}）：${text.slice(0, 200)}`)
+    }
+    const json = await response.json()
+    if (!json.access_token || !json.refresh_token || typeof json.expires_in !== 'number') {
+      throw new Error('令牌交换响应缺少字段')
+    }
+    const payload = decodeJwtPayload(json.access_token)
+    const claim = payload?.['https://api.openai.com/auth']
+    const idPayload = typeof json.id_token === 'string' ? decodeJwtPayload(json.id_token) : undefined
+    const tokens = {
+      access: json.access_token,
+      refresh: json.refresh_token,
+      expires: Date.now() + json.expires_in * 1000,
+      accountId: claim?.user_id,
+      email: json.email ?? idPayload?.email,
+      plan: claim?.chatgpt_plan_type,
+      source: 'web',
+      syncedAt: Date.now(),
+    }
+    writeTokenStore(tokens)
+    await ensureProviderRoute(ctx)
+    if (webFlow) {
+      webFlow.pending = false
+      webFlow.approved = true
+      webFlow.account = tokens.email
+    }
+  } catch (error) {
+    if (webFlow) {
+      webFlow.pending = false
+      webFlow.approved = false
+      webFlow.error = error instanceof Error ? error.message : String(error)
+    }
+  } finally {
+    if (webFlow?.server) {
+      try { webFlow.server.close() } catch { /* already closed */ }
+    }
+  }
+}
+
+async function handleWebLoginStatus(ctx, req, res) {
+  if (!originAllowed(ctx, req)) {
+    respond(res, 403, { ok: false, code: 'forbidden', message: 'Cross-origin request refused.' })
+    return
+  }
+  if (req.method !== 'GET') {
+    respond(res, 405, { ok: false, code: 'method', message: 'GET only.' })
+    return
+  }
+  const flow = webFlow
+  if (!flow || flow.pending) {
+    respond(res, 200, { ok: true, state: flow?.pending === true ? 'pending' : 'none' })
+    return
+  }
+  if (flow.approved) {
+    respond(res, 200, { ok: true, state: 'approved', account: flow.account })
+    return
+  }
+  respond(res, 200, { ok: false, state: 'failed', message: flow.error ?? '登录失败' })
+}
+
+
 async function handleQuota(ctx, req, res) {
   if (!originAllowed(ctx, req)) {
     respond(res, 403, { ok: false, code: 'forbidden', message: 'Cross-origin request refused.' })
@@ -772,6 +935,7 @@ async function handleLogout(ctx, req, res) {
   }
   clearTokenStore()
   deviceFlow = null
+  if (webFlow) { try { webFlow.server?.close() } catch { /* already closed */ } webFlow = null }
   manualOverride = null
   quotaCache = { at: 0, value: undefined }
   await ensureProviderRoute(ctx)

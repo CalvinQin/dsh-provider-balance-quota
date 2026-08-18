@@ -27,7 +27,8 @@ window.__ModuleLoader__.load({
 		const LOGIN_STATUS_URL = "/ext/chatgpt/login/status";
 		const LOGOUT_URL = "/ext/chatgpt/logout";
 		const MANAGER_OPEN_URL = "/ext/chatgpt/login/open-manager";
-		const CHOOSE_ACCOUNT_URL = "https://auth.openai.com/choose-an-account";
+		const WEB_START_URL = "/ext/chatgpt/login/web-start";
+		const WEB_STATUS_URL = "/ext/chatgpt/login/web-status";
 
 		const name = "dsh-provider-balance";
 		const inject = ["slots"];
@@ -204,6 +205,44 @@ window.__ModuleLoader__.load({
 					.catch(() => { setSwitching(false); if (popup) popup.close(); });
 			};
 
+			// 无 CodexManager 时：真实 OAuth 网页登录（PKCE 授权码）。
+			const startWebLogin = () => {
+				setSwitching(true);
+				fetch(WEB_START_URL, { method: "POST", headers: { accept: "application/json" } })
+					.then((r) => r.json().catch(() => null))
+					.then((body) => {
+						if (!body?.ok) {
+							setSwitching(false);
+							setOpenHint(body?.message ?? "发起网页登录失败，改用验证码登录。");
+							startDeviceFlow();
+							return;
+						}
+						setOpenHint("已打开 OpenAI 网页登录，登录完成后自动接入…");
+						const popup = window.open("about:blank", "_blank");
+						if (popup) popup.location.href = body.authorizeUrl;
+						else window.open(body.authorizeUrl, "_blank");
+						const timer = setInterval(() => {
+							fetch(WEB_STATUS_URL, { headers: { accept: "application/json" } })
+								.then((r) => r.json().catch(() => null))
+								.then((st) => {
+									if (!st) return;
+									if (st.state === "approved") {
+										clearInterval(timer);
+										setSwitching(false);
+										setOpenHint(`网页登录成功（${st.account ?? "ChatGPT"}）。`);
+										chat.refresh();
+									} else if (st.state === "failed") {
+										clearInterval(timer);
+										setSwitching(false);
+										setOpenHint(st.message ?? "网页登录失败，可改用验证码登录。");
+									}
+								})
+								.catch(() => {});
+						}, 2500);
+					})
+					.catch(() => { setSwitching(false); setOpenHint("发起网页登录失败，改用验证码登录。"); startDeviceFlow(); });
+			};
+
 			// 主路径：打开 CodexManager（登录走 auth.openai.com/choose-an-account），
 			// token 由 CodexManager 写回 ~/.codex/auth.json，插件自动同步。
 			const switchAccount = () => {
@@ -216,14 +255,14 @@ window.__ModuleLoader__.load({
 							if (body?.ok) {
 								setOpenHint(body?.verifyUrl ? "已打开 CodexManager：请在其中登录/切换账号，DSH 会自动跟随。" : "已打开 CodexManager");
 							} else {
-								setOpenHint("未检测到 CodexManager，改用网页授权登录。");
-								startDeviceFlow();
+								setOpenHint("未检测到 CodexManager，改用网页登录。");
+								startWebLogin();
 							}
 						})
-						.catch(() => { setSwitching(false); setOpenHint("打开 CodexManager 失败，改用网页授权登录。"); startDeviceFlow(); });
+						.catch(() => { setSwitching(false); setOpenHint("打开 CodexManager 失败，改用网页登录。"); startWebLogin(); });
 					return;
 				}
-				startDeviceFlow();
+				startWebLogin();
 			};
 
 			useEffect(() => {
@@ -289,8 +328,8 @@ window.__ModuleLoader__.load({
 							jsx("span", { className: "dshg-segLabel", children: planLabel(chat.status?.plan) }),
 							!loggedIn && jsx("span", { className: "dshg-segValue dim", children: "未登录" }),
 							loggedIn && remainingPercent(chat.quota) !== null && jsx("div", { className: "dshg-progress", children: jsx("div", { className: `dshg-progressFill${chip.cls === "warn" ? " warn" : ""}`, style: { width: `${remainingPercent(chat.quota)}%` } }) }),
-							loggedIn && remainingPercent(chat.quota) !== null && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `授权码 ${switchCode}` : (openHint ?? `剩余 ${remainingPercent(chat.quota)}% · ${resetLabel(chat.quota)}`) }),
-							!loggedIn && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `授权码 ${switchCode}` : (openHint ?? "") }),
+							loggedIn && remainingPercent(chat.quota) !== null && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `验证码 ${switchCode}` : (openHint ?? `剩余 ${remainingPercent(chat.quota)}% · ${resetLabel(chat.quota)}`) }),
+							!loggedIn && jsx("span", { className: "dshg-quotaMeta", children: switchCode ? `验证码 ${switchCode}` : (openHint ?? "") }),
 							jsxs("div", { className: "dshg-segActions", children: [
 								jsx("a", { className: "dshg-segBtn", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", onClick: (e) => e.stopPropagation(), children: loggedIn ? "打开" : "登录" }),
 								jsx("button", { type: "button", className: "dshg-segBtn", disabled: switching, onClick: (e) => { e.stopPropagation(); switchAccount(); }, children: switching ? "授权中…" : "切换账号" }),
@@ -384,6 +423,45 @@ window.__ModuleLoader__.load({
 					.catch(() => { setBusy(false); setMsg({ kind: "bad", text: "打开 CodexManager 失败。" }); });
 			};
 
+			// 真实 OAuth 网页登录（PKCE 授权码）：打开 auth.openai.com 网页授权，
+			// 登录后 OpenAI 回调本地端口，插件自动换令牌入库。
+			const openWebLogin = () => {
+				setBusy(true);
+				setMsg(null);
+				fetch(WEB_START_URL, { method: "POST", headers: { accept: "application/json" } })
+					.then((r) => r.json().catch(() => null))
+					.then((body) => {
+						if (!body?.ok) {
+							setBusy(false);
+							setMsg({ kind: "bad", text: body?.message ?? "发起网页登录失败。" });
+							return;
+						}
+						setMsg({ kind: "ok", text: "已打开 OpenAI 网页登录，完成登录后自动接入。" });
+						const popup = window.open("about:blank", "_blank");
+						if (popup) popup.location.href = body.authorizeUrl;
+						else window.open(body.authorizeUrl, "_blank");
+						const timer = setInterval(() => {
+							fetch(WEB_STATUS_URL, { headers: { accept: "application/json" } })
+								.then((r) => r.json().catch(() => null))
+								.then((st) => {
+									if (!st) return;
+									if (st.state === "approved") {
+										clearInterval(timer);
+										setBusy(false);
+										setMsg({ kind: "ok", text: `网页登录成功（${st.account ?? "ChatGPT"}），已接入 DSH。` });
+										chat.refresh();
+									} else if (st.state === "failed") {
+										clearInterval(timer);
+										setBusy(false);
+										setMsg({ kind: "bad", text: st.message ?? "网页登录失败。" });
+									}
+								})
+								.catch(() => {});
+						}, 2500);
+					})
+					.catch(() => { setBusy(false); setMsg({ kind: "bad", text: "发起网页登录失败。" }); });
+			};
+
 			const logout = () => {
 				setBusy(true);
 				fetch(LOGOUT_URL, { method: "POST", headers: { accept: "application/json" } })
@@ -405,7 +483,7 @@ window.__ModuleLoader__.load({
 					className: "dshg-statusRow",
 					children: [
 						jsx("span", { className: "dshg-status", children: loggedIn ? "已登录" : "未登录" }),
-						jsx("span", { className: "dshg-sub", children: managedByCodex ? "由 CodexManager 同步账号" : (loggedIn ? "网页授权" : "尚未接入") }),
+						jsx("span", { className: "dshg-sub", children: managedByCodex ? "由 CodexManager 同步账号" : (loggedIn ? "手动授权" : "尚未接入") }),
 					],
 				});
 				if (loggedIn && chat.quota?.status === "invalidated") {
@@ -421,7 +499,7 @@ window.__ModuleLoader__.load({
 				accountBody = jsxs("div", {
 					className: "dshg-sub",
 					children: [
-						status?.source === "codex-manager" ? "由 CodexManager 管理账号，切换后 DSH 自动跟随。" : "网页授权账号，令牌将自动刷新。",
+						status?.source === "codex-manager" ? "由 CodexManager 管理账号，切换后 DSH 自动跟随。" : "手动授权账号，令牌将自动刷新。",
 					],
 				});
 			}
@@ -432,12 +510,12 @@ window.__ModuleLoader__.load({
 					className: "dshg-flow",
 					children: [
 						jsx("div", { className: "dshg-code", children: flow.userCode }),
-						jsx("div", { className: "dshg-hint", children: "网页授权码登录：在打开的 OpenAI 登录页输入上方授权码并点击「继续」，授权成功后自动接入 DSH。" }),
+						jsx("div", { className: "dshg-hint", children: "请在新打开的 OpenAI 授权页输入上面的验证码并点击「继续」，等待授权结果…" }),
 						jsxs("div", {
 							className: "dshg-actions",
 							children: [
-								jsx("a", { className: "dshg-primary", href: flow.verificationUrl, target: "_blank", rel: "noopener noreferrer", children: "打开登录页" }),
-								jsx("span", { className: "dshg-hint", children: "若页面未打开，请访问 auth.openai.com/codex/device 输入授权码" }),
+								jsx("a", { className: "dshg-primary", href: flow.verificationUrl, target: "_blank", rel: "noopener noreferrer", children: "打开授权页" }),
+								jsx("span", { className: "dshg-hint", children: "若页面未打开，请手动访问 auth.openai.com/codex/device" }),
 							],
 						}),
 					],
@@ -489,9 +567,8 @@ window.__ModuleLoader__.load({
 						children: [
 							status?.managerAvailable
 								? jsx("button", { type: "button", className: "dshg-primary", onClick: openManager, disabled: busy, children: loggedIn ? "打开 CodexManager 切换" : "用 CodexManager 登录" })
-								: jsx("button", { type: "button", className: "dshg-primary", onClick: startLogin, disabled: busy, children: loggedIn ? "切换账号" : "网页授权登录" }),
-							status?.managerAvailable && jsx("button", { type: "button", className: "dshg-ghost", onClick: startLogin, disabled: busy, children: "网页授权登录（备用）" }),
-							jsx("a", { className: "dshg-ghost", href: CHOOSE_ACCOUNT_URL, target: "_blank", rel: "noopener noreferrer", children: "OpenAI 账号登录" }),
+								: jsx("button", { type: "button", className: "dshg-primary", onClick: openWebLogin, disabled: busy, children: loggedIn ? "网页登录切换" : "网页登录" }),
+							jsx("button", { type: "button", className: "dshg-ghost", onClick: startLogin, disabled: busy, children: "验证码登录（备用）" }),
 							jsx("a", { className: "dshg-ghost", href: CHATGPT_URL, target: "_blank", rel: "noopener noreferrer", children: "打开 ChatGPT" }),
 							loggedIn && !managedByCodex && jsx("button", { type: "button", className: "dshg-ghost danger", onClick: logout, disabled: busy, children: "退出登录" }),
 						],
